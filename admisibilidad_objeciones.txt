@@ -1,4 +1,5 @@
 const GEMINI_API_KEY = "xxxx";
+
 function createTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
@@ -272,38 +273,67 @@ function processSummary(text) {
 
 
 
+
+const FOLDER_IDS = ['xxxx']; // Reemplazar con IDs reales
+
+
+
+async function searchDriveFiles(text, folderIds) {
+ Logger.log('Drive - Buscando: ' + text);
+ try {
+   let allResults = [];
+   for (const folderId of folderIds) {
+     const folder = DriveApp.getFolderById(folderId);
+     const query = `fullText contains '${text}' and (mimeType = 'application/pdf' or mimeType = 'application/vnd.google-apps.document')`;
+     Logger.log('Drive - Query: ' + query);
+     
+     const files = folder.searchFiles(query);
+     while (files.hasNext()) {
+       const file = files.next();
+       allResults.push({
+         name: file.getName(),
+         url: file.getUrl(),
+         snippet: file.getMimeType() === 'application/vnd.google-apps.document' ? 
+           DocumentApp.openById(file.getId()).getBody().getText().substring(0, 200) : 
+           'Archivo PDF'
+       });
+     }
+   }
+   Logger.log('Drive - Resultados encontrados: ' + allResults.length);
+   return allResults.slice(0, 3);
+ } catch(e) {
+   Logger.log('Error búsqueda Drive: ' + e);
+   return null;
+ }
+}
+
 async function searchCGRFiles(text) {
- const API_KEY = 'xxxxxx'; 
- const CX = 'xxxxxxx';           
- const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(text )}`;
+ const API_KEY = 'Axxx'; 
+ const CX = '75xxxx1';           
+ const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(text + ' cgr.go.cr')}`;
  
- Logger.log('Buscando: ' + text);
+ Logger.log('Web - Buscando: ' + text);
+ Logger.log('Web - URL: ' + searchUrl);
  
  try {
    const response = await UrlFetchApp.fetch(searchUrl);
    const result = JSON.parse(response.getContentText());
-   Logger.log('Respuesta búsqueda: ' + JSON.stringify(result));
+   Logger.log('Web - Respuesta completa: ' + JSON.stringify(result));
    
-   if (result.items && result.items.length > 0) {
+   if (result.items?.length > 0) {
      const relevantResult = result.items.find(item => 
-       item.title?.includes('R-DCA') || 
-       item.title?.includes('R-DCP') ||
-       item.title?.includes('Contraloría General') ||
-       item.title?.includes('División de Contratación') ||
-       item.snippet?.includes('cgrfiles.cgr.go.cr')|| 
-       item.snippet?.includes('Recurso de objeción')||
-       item.snippet?.includes('pgrweb.go.cr')
-
+       ['R-DCA', 'R-DCP', 'Contraloría General', 'División de Contratación']
+         .some(term => item.title?.includes(term) || item.snippet?.includes(term))
      );
-
-     const resultToUse = relevantResult ;
+     const resultToUse = relevantResult || result.items[0];
+     Logger.log('Web - Resultado seleccionado: ' + JSON.stringify(resultToUse));
      return {
        url: resultToUse.link,
        snippet: resultToUse.snippet
      };
    }
  } catch (e) {
-   Logger.log('Error: ' + e.toString());
+   Logger.log('Error búsqueda web: ' + e);
  }
  return null;
 }
@@ -365,7 +395,7 @@ async function sendResultEmail(sender, procedimientoNum, pages, originalMessage,
                payload: JSON.stringify({
                  contents: [{
                    parts: [{
-                     text: `haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula dos conceptos claves de máximo tres palabras cada uno, separados por punto y coma cada uno de estos conceptos.Al menos unos de los conceptos debe estar ligado al tipo de objeto o servicio que trata el documento resumido  \n\n${contenido}`
+                     text: `Sos un abogado experto en compras públicas, haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula al menos cinco conceptos claves de máximo cinco palabras cada uno, separados por punto y coma cada uno de estos conceptos, usando el título "CONCEPTOS CLAVES:", al menos unos de los conceptos deben referirse al objeto mencionado en el documento, los demás conceptos claves  deben contestar las preguntas ¿Qué tipo de objeto bien se menciona en el documento?, ¿Cómo lo están vulnerando al recurrente?,¿Qué pide en concreto la petitoria?. \n\n${contenido}`
                    }]
                  }],
                  generationConfig: {
@@ -384,10 +414,205 @@ async function sendResultEmail(sender, procedimientoNum, pages, originalMessage,
              let summaryHtml = `
                <tr>
                  <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
-                 <td style="padding:8px; border:1px solid #ddd;">${summary.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</td>
+                 <td style="padding:8px; border:1px solid #ddd;">${summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</td>
                </tr>`;
 
-             // Extraer y procesar conceptos
+             const conceptsMatch = summary.match(/conceptos\s+claves?:([^]*?)$/i);
+             if (conceptsMatch) {
+               const conceptos = conceptsMatch[1]
+                 .split(/[;,.\n*-]/)
+                 .map(c => c.trim().replace(/\*/g, ''))
+                 .filter(c => c && c.length > 0 && !c.toLowerCase().includes('conceptos'));
+               
+               Logger.log('Conceptos encontrados: ' + conceptos.join(', '));
+
+               for (const concepto of conceptos) {
+                 Logger.log('Procesando concepto: ' + concepto);
+                 const webResult = await searchCGRFiles(concepto);
+                 const driveResults = await searchDriveFiles(concepto, FOLDER_IDS);
+                 
+                 let resultsHtml = '';
+                 
+                 if (webResult) {
+                   resultsHtml += `<strong>Web:</strong><br>
+                     <a href="${webResult.url}" target="_blank">Ver documento</a><br>
+                     <small>${webResult.snippet}</small>`;
+                 } else {
+                   resultsHtml += '<strong>Web:</strong><br>No se encontraron resultados';
+                 }
+                 
+                 resultsHtml += '<br><br><strong>Drive:</strong><br>';
+                 if (driveResults?.length > 0) {
+                   resultsHtml += driveResults.map(r => 
+                     `<a href="${r.url}" target="_blank">${r.name}</a><br>
+                      <small>${r.snippet}</small>`
+                   ).join('<br><br>');
+                 } else {
+                   resultsHtml += 'No se encontraron resultados';
+                 }
+                 
+                 summaryHtml += `
+                   <tr>
+                     <td style="padding:8px; border:1px solid #ddd;"><strong>Concepto - ${concepto}</strong></td>
+                     <td style="padding:8px; border:1px solid #ddd;">${resultsHtml}</td>
+                   </tr>`;
+               }
+             }
+
+             summariesHtml += summaryHtml;
+             attachments.push(Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`));
+           } catch (e) {
+             Logger.log('Error: ' + e.toString());
+             summariesHtml += `<tr>
+               <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
+               <td style="padding:8px; border:1px solid #ddd;">Error al generar resumen del recurso.</td>
+             </tr>`;
+           }
+         }
+         recursoNum++;
+         Utilities.sleep(2000);
+       }
+     }
+   }
+
+   try {
+     for (const page of ['search', 'details', 'description']) {
+       var pdf = convertHtmlToPdfViaDoc(pages[page].getDataAsString(), 'sicop_' + page);
+       if (pdf) attachments.push(pdf);
+     }
+   } catch (pdfError) {
+     if (pdfError.message.includes('Service unavailable') || pdfError.message.includes('Service invoked too many times')) {
+       pdfMessage = '<br><br><strong>Nota: Servicio de conversión a PDF no disponible temporalmente. Se adjuntan archivos HTML.</strong>';
+       attachments = htmlAttachments;
+     } else {
+       throw pdfError;
+     }
+   }
+
+   if (!pdfMessage) {
+     attachments = attachments.concat(htmlAttachments);
+   }
+
+   var dateAnalysis = analyzeDates(emailDate, pages.details.getDataAsString());
+   
+   var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
+               '<table style="width:100%; border-collapse: collapse; margin-bottom: 20px;">' +
+               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Procedimiento</strong></td>' +
+               '<td style="padding:8px; border:1px solid #ddd;">' + procedimientoNum + '</td></tr>' +
+               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de remisión de correo SICOP</strong></td>' +
+               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.emailDate + '</td></tr>' +
+               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de publicación del cartel</strong></td>' +
+               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.publicationDate + '</td></tr>' +
+               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Días hábiles</strong></td>' +
+               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.workingDays + '</td></tr>' +
+               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Estado</strong></td>' +
+               '<td style="padding:8px; border:1px solid #ddd;"><strong>' + dateAnalysis.status + '</strong></td></tr>' +
+               summariesHtml +
+               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>URLs consultadas</strong></td>' +
+               '<td style="padding:8px; border:1px solid #ddd;">1. ' + pages.urls[0] + '<br>2. ' + pages.urls[1] + '<br>3. ' + pages.urls[2] + '</td></tr>' +
+               '</table>' +
+               pdfMessage +
+               '</div>';
+
+   GmailApp.sendEmail(
+     sender,
+     'Resultado SICOP - Procedimiento ' + procedimientoNum,
+     '', 
+     {
+       htmlBody: htmlBody,
+       attachments: attachments,
+       replyTo: originalMessage.getReplyTo() || sender
+     }
+   );
+
+   Logger.log('Correo enviado');
+ } catch (e) {
+   logError('EMAIL_SEND_ERROR', e);
+   if (e.message.includes('Service unavailable')) {
+     Utilities.sleep(Math.pow(2, attempt) * 1000);
+     sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate, attempt + 1);
+   }
+ }
+}
+async function sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate) {
+ try {
+   var attachments = [];
+   var htmlAttachments = [
+     {fileName: 'sicop_busqueda.html', content: pages.search.getBytes(), mimeType: 'text/html'},
+     {fileName: 'sicop_detalles.html', content: pages.details.getBytes(), mimeType: 'text/html'},
+     {fileName: 'sicop_descripcion.html', content: pages.description.getBytes(), mimeType: 'text/html'}
+   ];
+
+   const detailsHtml = pages.details.getDataAsString();
+   const objetosMatch = detailsHtml.match(/fn_datailRecurso\('([^']+)',\s*'([^']+)',\s*1\)/);
+   let summariesHtml = '';
+   let pdfMessage = '';
+
+   if(objetosMatch) {
+     const [_, cartelNo, cartelSeq] = objetosMatch;
+     const recursosUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ400.jsp?cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&reqNew=1`;
+     
+     const recursosResponse = await UrlFetchApp.fetch(recursosUrl, {muteHttpExceptions: true});
+     const recursosHtml = recursosResponse.getContentText();
+
+     htmlAttachments.push({
+       fileName: 'listado_recursos.html',
+       content: Utilities.newBlob(recursosHtml).getBytes(),
+       mimeType: 'text/html'
+     });
+
+     const recursosEnProceso = recursosHtml.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)[^>]*>En proceso/g) || [];
+     let recursoNum = 1;
+     
+     for(const row of recursosEnProceso) {
+       const params = row.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)/);
+       if(params) {
+         const [_, recursoSeqno, cartelNo, cartelSeq, cartelCate] = params;
+         
+         const detalleUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ402.jsp?recursoSeqno=${recursoSeqno}&cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&cartelCate=${cartelCate}&reqNew=1`;
+         const detalleResponse = await UrlFetchApp.fetch(detalleUrl, {muteHttpExceptions: true});
+         const detalleHtml = detalleResponse.getContentText();
+
+         htmlAttachments.push({
+           fileName: `recurso_detalle_${recursoNum}.html`,
+           content: Utilities.newBlob(detalleHtml).getBytes(),
+           mimeType: 'text/html'
+         });
+
+         const contenidoMatch = /<textarea[^>]*name\s*=\s*["']recursoCont["'][^>]*>([\s\S]*?)<\/textarea>/i.exec(detalleHtml);
+         
+         if(contenidoMatch && contenidoMatch[1]) {
+           const contenido = contenidoMatch[1].trim();
+           
+           try {
+             const response = await UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + GEMINI_API_KEY, {
+               method: 'POST',
+               contentType: 'application/json',
+               payload: JSON.stringify({
+                 contents: [{
+                   parts: [{
+                     text: `haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula cuatro conceptos claves de máximo tres palabras, separados por punto y coma cada uno de estos conceptos. \n\n${contenido}`
+                   }]
+                 }],
+                 generationConfig: {
+                   temperature: 0.7,
+                   topK: 40,
+                   topP: 0.95,
+                   maxOutputTokens: 1024,
+                 }
+               }),
+               muteHttpExceptions: true
+             });
+             
+             const result = JSON.parse(response.getContentText());
+             let summary = result.candidates[0].content.parts[0].text;
+             
+             let summaryHtml = `
+               <tr>
+                 <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
+                 <td style="padding:8px; border:1px solid #ddd;">${summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</td>
+               </tr>`;
+
              const conceptsMatch = summary.match(/conceptos\s+claves?:([^]*?)$/i);
              if (conceptsMatch) {
                const conceptos = conceptsMatch[1]
@@ -395,18 +620,32 @@ async function sendResultEmail(sender, procedimientoNum, pages, originalMessage,
                  .map(c => c.trim().replace(/\*/g, ''))
                  .filter(c => c && c.length > 0 && !c.toLowerCase().includes('conceptos'));
 
-               Logger.log('Conceptos encontrados: ' + conceptos.join(', '));
-
                for (const concepto of conceptos) {
                  Logger.log('Buscando concepto: ' + concepto);
-                 const searchResult = await searchCGRFiles(concepto);
+                 const webResult = await searchCGRFiles(concepto);
+                 const driveResults = await searchDriveFiles(concepto, FOLDER_IDS);
+                 
+                 let resultsHtml = '';
+                 if (webResult) {
+                   resultsHtml += `<strong>Web:</strong><br>
+                     <a href="${webResult.url}" target="_blank">Ver documento</a><br>
+                     <small>${webResult.snippet}</small>`;
+                 }
+                 
+                 if (driveResults?.length > 0) {
+                   if (resultsHtml) resultsHtml += '<br><br>';
+                   resultsHtml += '<strong>Documentos Drive:</strong><br>' + 
+                     driveResults.map(r => 
+                       `<a href="${r.url}" target="_blank">${r.name}</a><br>
+                        <small>${r.snippet}</small>`
+                     ).join('<br><br>');
+                 }
                  
                  summaryHtml += `
                    <tr>
                      <td style="padding:8px; border:1px solid #ddd;"><strong>Concepto - ${concepto}</strong></td>
                      <td style="padding:8px; border:1px solid #ddd;">
-                       ${searchResult ? `<a href="${searchResult.url}" target="_blank">Ver documento</a><br>
-                        <small>${searchResult.snippet}</small>` : 'No se encontraron resultados'}
+                       ${resultsHtml || 'No se encontraron resultados'}
                      </td>
                    </tr>`;
                }
