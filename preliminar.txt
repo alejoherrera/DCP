@@ -1,4 +1,4 @@
-const GEMINI_API_KEY = "AIzaSyAbBgx8J1mPbj3rPyFt57XbgJY98PwQHMo";
+const GEMINI_API_KEY = "xxxx";
 function createTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
@@ -272,61 +272,40 @@ function processSummary(text) {
 
 
 
-
-
- 
-
-
-
 async function searchCGRFiles(text) {
-  const API_KEY = 'AIzaSyANAKntf9M8uHt5-SPW4vheQmUbKqjdomE'; 
-  const CX = '75ee485f7b0e84e21';           
-  const words = text.split(/\s+/).slice(0, 20).join(' ');
-  const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&q=${encodeURIComponent(words)}`;
-  
-  Logger.log('---INICIANDO BÚSQUEDA DE CONCEPTO---');
-  Logger.log('Concepto a buscar: ' + text);
-  Logger.log('Texto de búsqueda: ' + words);
-  Logger.log('URL: ' + searchUrl);
-  
-  try {
-    Logger.log('Ejecutando búsqueda...');
-    const response = await UrlFetchApp.fetch(searchUrl);
-    Logger.log('Status code: ' + response.getResponseCode());
-    const result = JSON.parse(response.getContentText());
-    Logger.log('Respuesta completa: ' + JSON.stringify(result));
-    
-    if (result.items && result.items.length > 0) {
-      Logger.log('Total resultados: ' + result.items.length);
-      const relevantResults = result.items.filter(item => 
-        item.link.includes('cgrfiles.cgr.go.cr') || 
-        item.title?.includes('Contraloría General') ||
-        item.title?.includes('R-DCA') ||
-        item.title?.includes('R-DCP') ||
-        item.snippet?.includes('Contraloría General') ||
-        item.snippet?.includes('R-DCA') ||
-        item.snippet?.includes('R-DCP')
-      );
-      
-      Logger.log('Resultados relevantes: ' + relevantResults.length);
-      if (relevantResults.length > 0) {
-        relevantResults.forEach((item, i) => {
-          Logger.log(`Resultado ${i + 1}:`);
-          Logger.log('URL: ' + item.link);
-          Logger.log('Snippet: ' + item.snippet);
-        });
-        return relevantResults.map(item => ({
-          url: item.link,
-          snippet: item.snippet
-        }));
-      }
-    }
-    Logger.log('No se encontraron resultados relevantes');
-  } catch (e) {
-    Logger.log('ERROR en búsqueda: ' + e.toString());
-    Logger.log('Stack: ' + e.stack);
-  }
-  return null;
+ const API_KEY = 'xxxxxx'; 
+ const CX = 'xxxxx';           
+ const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(text )}`;
+ 
+ Logger.log('Buscando: ' + text);
+ 
+ try {
+   const response = await UrlFetchApp.fetch(searchUrl);
+   const result = JSON.parse(response.getContentText());
+   Logger.log('Respuesta búsqueda: ' + JSON.stringify(result));
+   
+   if (result.items && result.items.length > 0) {
+     const relevantResult = result.items.find(item => 
+       item.title?.includes('R-DCA') || 
+       item.title?.includes('R-DCP') ||
+       item.title?.includes('Contraloría General') ||
+       item.title?.includes('División de Contratación') ||
+       item.snippet?.includes('cgrfiles.cgr.go.cr')|| 
+       item.snippet?.includes('Recurso de objeción')||
+       item.snippet?.includes('pgrweb.go.cr')
+
+     );
+
+     const resultToUse = relevantResult ;
+     return {
+       url: resultToUse.link,
+       snippet: resultToUse.snippet
+     };
+   }
+ } catch (e) {
+   Logger.log('Error: ' + e.toString());
+ }
+ return null;
 }
 
 async function sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate) {
@@ -347,8 +326,7 @@ async function sendResultEmail(sender, procedimientoNum, pages, originalMessage,
      const [_, cartelNo, cartelSeq] = objetosMatch;
      const recursosUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ400.jsp?cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&reqNew=1`;
      
-     Logger.log('Obteniendo recursos...');
-     const recursosResponse = UrlFetchApp.fetch(recursosUrl, {muteHttpExceptions: true});
+     const recursosResponse = await UrlFetchApp.fetch(recursosUrl, {muteHttpExceptions: true});
      const recursosHtml = recursosResponse.getContentText();
 
      htmlAttachments.push({
@@ -358,17 +336,15 @@ async function sendResultEmail(sender, procedimientoNum, pages, originalMessage,
      });
 
      const recursosEnProceso = recursosHtml.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)[^>]*>En proceso/g) || [];
-     Logger.log(`Recursos en proceso: ${recursosEnProceso.length}`);
-     
      let recursoNum = 1;
+     
      for(const row of recursosEnProceso) {
        const params = row.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)/);
        if(params) {
          const [_, recursoSeqno, cartelNo, cartelSeq, cartelCate] = params;
-         Logger.log(`Procesando recurso ${recursoNum}`);
          
          const detalleUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ402.jsp?recursoSeqno=${recursoSeqno}&cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&cartelCate=${cartelCate}&reqNew=1`;
-         const detalleResponse = UrlFetchApp.fetch(detalleUrl, {muteHttpExceptions: true});
+         const detalleResponse = await UrlFetchApp.fetch(detalleUrl, {muteHttpExceptions: true});
          const detalleHtml = detalleResponse.getContentText();
 
          htmlAttachments.push({
@@ -383,61 +359,63 @@ async function sendResultEmail(sender, procedimientoNum, pages, originalMessage,
            const contenido = contenidoMatch[1].trim();
            
            try {
-             const payload = {
-               contents: [{
-                 parts: [{
-                   text: `haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula cuatro conceptos claves de máximo tres palabras, separados por punto y coma cada uno de estos conceptos. \n\n${contenido}`
-                 }]
-               }],
-               generationConfig: {
-                 temperature: 0.7,
-                 topK: 40,
-                 topP: 0.95,
-                 maxOutputTokens: 1024,
-               }
-             };
-             
              const response = await UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + GEMINI_API_KEY, {
                method: 'POST',
                contentType: 'application/json',
-               payload: JSON.stringify(payload),
+               payload: JSON.stringify({
+                 contents: [{
+                   parts: [{
+                     text: `haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula dos conceptos claves de máximo tres palabras cada uno, separados por punto y coma cada uno de estos conceptos.Al menos unos de los conceptos debe estar ligado al tipo de objeto o servicio que trata el documento resumido  \n\n${contenido}`
+                   }]
+                 }],
+                 generationConfig: {
+                   temperature: 0.7,
+                   topK: 40,
+                   topP: 0.95,
+                   maxOutputTokens: 1024,
+                 }
+               }),
                muteHttpExceptions: true
              });
              
              const result = JSON.parse(response.getContentText());
              let summary = result.candidates[0].content.parts[0].text;
              
-             // Convertir **texto** en <strong>texto</strong>
-             summary = summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-
              let summaryHtml = `
                <tr>
                  <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
-                 <td style="padding:8px; border:1px solid #ddd;">${summary}</td>
+                 <td style="padding:8px; border:1px solid #ddd;">${summary.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</td>
                </tr>`;
 
-             // Buscar referencias por argumento
-             const arguments = summary.replace(/<\/?strong>/g, '').split(/\n\n/).filter(Boolean);
-             for (const arg of arguments) {
-               Logger.log('Buscando referencia para: ' + arg);
-               const searchResult = await searchCGRFiles(arg);
-               if (searchResult) {
+             // Extraer y procesar conceptos
+             const conceptsMatch = summary.match(/conceptos\s+claves?:([^]*?)$/i);
+             if (conceptsMatch) {
+               const conceptos = conceptsMatch[1]
+                 .split(/[;,.\n*-]/)
+                 .map(c => c.trim().replace(/\*/g, ''))
+                 .filter(c => c && c.length > 0 && !c.toLowerCase().includes('conceptos'));
+
+               Logger.log('Conceptos encontrados: ' + conceptos.join(', '));
+
+               for (const concepto of conceptos) {
+                 Logger.log('Buscando concepto: ' + concepto);
+                 const searchResult = await searchCGRFiles(concepto);
+                 
                  summaryHtml += `
                    <tr>
-                     <td style="padding:8px; border:1px solid #ddd;"><strong>Referencia CGR</strong></td>
+                     <td style="padding:8px; border:1px solid #ddd;"><strong>Concepto - ${concepto}</strong></td>
                      <td style="padding:8px; border:1px solid #ddd;">
-                       <a href="${searchResult.url}" target="_blank">Ver documento</a><br>
-                       <small>${searchResult.snippet}</small>
+                       ${searchResult ? `<a href="${searchResult.url}" target="_blank">Ver documento</a><br>
+                        <small>${searchResult.snippet}</small>` : 'No se encontraron resultados'}
                      </td>
                    </tr>`;
                }
              }
 
              summariesHtml += summaryHtml;
-             const recursoBlob = Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`);
-             attachments.push(recursoBlob);
+             attachments.push(Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`));
            } catch (e) {
-             Logger.log('Error procesando: ' + e.toString());
+             Logger.log('Error: ' + e.toString());
              summariesHtml += `<tr>
                <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
                <td style="padding:8px; border:1px solid #ddd;">Error al generar resumen del recurso.</td>
@@ -509,8 +487,6 @@ async function sendResultEmail(sender, procedimientoNum, pages, originalMessage,
    }
  }
 }
-
-
 function sendErrorEmail(sender, procedimientoNum, errorMessage) {
   try {
     var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
