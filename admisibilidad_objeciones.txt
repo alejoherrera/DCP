@@ -1,5 +1,4 @@
-const GEMINI_API_KEY = "xxxx";
-
+const GEMINI_API_KEY = "";
 function createTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
@@ -274,42 +273,46 @@ function processSummary(text) {
 
 
 
-const FOLDER_IDS = ['xxxx']; // Reemplazar con IDs reales
+const FOLDER_IDS = ['1AkBzZ1Mb3RB8Ir']; // Reemplazar con IDs reales
 
 
 
-async function searchDriveFiles(text, folderIds) {
- Logger.log('Drive - Buscando: ' + text);
- try {
-   let allResults = [];
-   for (const folderId of folderIds) {
-     const folder = DriveApp.getFolderById(folderId);
-     const query = `fullText contains '${text}' and (mimeType = 'application/pdf' or mimeType = 'application/vnd.google-apps.document')`;
-     Logger.log('Drive - Query: ' + query);
-     
-     const files = folder.searchFiles(query);
-     while (files.hasNext()) {
-       const file = files.next();
-       allResults.push({
-         name: file.getName(),
-         url: file.getUrl(),
-         snippet: file.getMimeType() === 'application/vnd.google-apps.document' ? 
-           DocumentApp.openById(file.getId()).getBody().getText().substring(0, 200) : 
-           'Archivo PDF'
-       });
-     }
-   }
-   Logger.log('Drive - Resultados encontrados: ' + allResults.length);
-   return allResults.slice(0, 3);
- } catch(e) {
-   Logger.log('Error búsqueda Drive: ' + e);
-   return null;
- }
+function searchDriveFiles(text, folderIds) {
+  Logger.log('Drive - Buscando: ' + text);
+  try {
+    let allResults = [];
+    for (const folderId of folderIds) {
+      const folder = DriveApp.getFolderById(folderId);
+      const query = `fullText contains '${text}' and (mimeType = 'application/pdf' or mimeType = 'application/vnd.google-apps.document')`;
+      Logger.log('Drive - Query: ' + query);
+      
+      const files = folder.searchFiles(query);
+      while (files.hasNext()) {
+        const file = files.next();
+        Logger.log('Archivo encontrado: ' + file.getName() + ' (ID: ' + file.getId() + ')');
+        
+        allResults.push({
+          id: file.getId(),
+          name: file.getName(),
+          url: file.getUrl(),
+          mimeType: file.getMimeType(),
+          snippet: file.getMimeType() === 'application/vnd.google-apps.document' ? 
+            DocumentApp.openById(file.getId()).getBody().getText().substring(0, 200) : 
+            'Archivo PDF'
+        });
+      }
+    }
+    Logger.log('Drive - Resultados encontrados: ' + allResults.length);
+    return allResults.slice(0, 3); // Limitamos a 3 resultados para no sobrecargar
+  } catch(e) {
+    Logger.log('Error búsqueda Drive: ' + e);
+    return null;
+  }
 }
 
 async function searchCGRFiles(text) {
- const API_KEY = 'Axxx'; 
- const CX = '75xxxx1';           
+ const API_KEY = ''; 
+ const CX = '';           
  const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(text + ' cgr.go.cr')}`;
  
  Logger.log('Web - Buscando: ' + text);
@@ -338,394 +341,478 @@ async function searchCGRFiles(text) {
  return null;
 }
 
-async function sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate) {
- try {
-   var attachments = [];
-   var htmlAttachments = [
-     {fileName: 'sicop_busqueda.html', content: pages.search.getBytes(), mimeType: 'text/html'},
-     {fileName: 'sicop_detalles.html', content: pages.details.getBytes(), mimeType: 'text/html'},
-     {fileName: 'sicop_descripcion.html', content: pages.description.getBytes(), mimeType: 'text/html'}
-   ];
-
-   const detailsHtml = pages.details.getDataAsString();
-   const objetosMatch = detailsHtml.match(/fn_datailRecurso\('([^']+)',\s*'([^']+)',\s*1\)/);
-   let summariesHtml = '';
-   let pdfMessage = '';
-
-   if(objetosMatch) {
-     const [_, cartelNo, cartelSeq] = objetosMatch;
-     const recursosUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ400.jsp?cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&reqNew=1`;
-     
-     const recursosResponse = await UrlFetchApp.fetch(recursosUrl, {muteHttpExceptions: true});
-     const recursosHtml = recursosResponse.getContentText();
-
-     htmlAttachments.push({
-       fileName: 'listado_recursos.html',
-       content: Utilities.newBlob(recursosHtml).getBytes(),
-       mimeType: 'text/html'
-     });
-
-     const recursosEnProceso = recursosHtml.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)[^>]*>En proceso/g) || [];
-     let recursoNum = 1;
-     
-     for(const row of recursosEnProceso) {
-       const params = row.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)/);
-       if(params) {
-         const [_, recursoSeqno, cartelNo, cartelSeq, cartelCate] = params;
-         
-         const detalleUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ402.jsp?recursoSeqno=${recursoSeqno}&cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&cartelCate=${cartelCate}&reqNew=1`;
-         const detalleResponse = await UrlFetchApp.fetch(detalleUrl, {muteHttpExceptions: true});
-         const detalleHtml = detalleResponse.getContentText();
-
-         htmlAttachments.push({
-           fileName: `recurso_detalle_${recursoNum}.html`,
-           content: Utilities.newBlob(detalleHtml).getBytes(),
-           mimeType: 'text/html'
-         });
-
-         const contenidoMatch = /<textarea[^>]*name\s*=\s*["']recursoCont["'][^>]*>([\s\S]*?)<\/textarea>/i.exec(detalleHtml);
-         
-         if(contenidoMatch && contenidoMatch[1]) {
-           const contenido = contenidoMatch[1].trim();
-           
-           try {
-             const response = await UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + GEMINI_API_KEY, {
-               method: 'POST',
-               contentType: 'application/json',
-               payload: JSON.stringify({
-                 contents: [{
-                   parts: [{
-                     text: `Sos un abogado experto en compras públicas, haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula al menos cinco conceptos claves de máximo cinco palabras cada uno, separados por punto y coma cada uno de estos conceptos, usando el título "CONCEPTOS CLAVES:", al menos unos de los conceptos deben referirse al objeto mencionado en el documento, los demás conceptos claves  deben contestar las preguntas ¿Qué tipo de objeto bien se menciona en el documento?, ¿Cómo lo están vulnerando al recurrente?,¿Qué pide en concreto la petitoria?. \n\n${contenido}`
-                   }]
-                 }],
-                 generationConfig: {
-                   temperature: 0.7,
-                   topK: 40,
-                   topP: 0.95,
-                   maxOutputTokens: 1024,
-                 }
-               }),
-               muteHttpExceptions: true
-             });
-             
-             const result = JSON.parse(response.getContentText());
-             let summary = result.candidates[0].content.parts[0].text;
-             
-             let summaryHtml = `
-               <tr>
-                 <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
-                 <td style="padding:8px; border:1px solid #ddd;">${summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</td>
-               </tr>`;
-
-             const conceptsMatch = summary.match(/conceptos\s+claves?:([^]*?)$/i);
-             if (conceptsMatch) {
-               const conceptos = conceptsMatch[1]
-                 .split(/[;,.\n*-]/)
-                 .map(c => c.trim().replace(/\*/g, ''))
-                 .filter(c => c && c.length > 0 && !c.toLowerCase().includes('conceptos'));
-               
-               Logger.log('Conceptos encontrados: ' + conceptos.join(', '));
-
-               for (const concepto of conceptos) {
-                 Logger.log('Procesando concepto: ' + concepto);
-                 const webResult = await searchCGRFiles(concepto);
-                 const driveResults = await searchDriveFiles(concepto, FOLDER_IDS);
-                 
-                 let resultsHtml = '';
-                 
-                 if (webResult) {
-                   resultsHtml += `<strong>Web:</strong><br>
-                     <a href="${webResult.url}" target="_blank">Ver documento</a><br>
-                     <small>${webResult.snippet}</small>`;
-                 } else {
-                   resultsHtml += '<strong>Web:</strong><br>No se encontraron resultados';
-                 }
-                 
-                 resultsHtml += '<br><br><strong>Drive:</strong><br>';
-                 if (driveResults?.length > 0) {
-                   resultsHtml += driveResults.map(r => 
-                     `<a href="${r.url}" target="_blank">${r.name}</a><br>
-                      <small>${r.snippet}</small>`
-                   ).join('<br><br>');
-                 } else {
-                   resultsHtml += 'No se encontraron resultados';
-                 }
-                 
-                 summaryHtml += `
-                   <tr>
-                     <td style="padding:8px; border:1px solid #ddd;"><strong>Concepto - ${concepto}</strong></td>
-                     <td style="padding:8px; border:1px solid #ddd;">${resultsHtml}</td>
-                   </tr>`;
-               }
-             }
-
-             summariesHtml += summaryHtml;
-             attachments.push(Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`));
-           } catch (e) {
-             Logger.log('Error: ' + e.toString());
-             summariesHtml += `<tr>
-               <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
-               <td style="padding:8px; border:1px solid #ddd;">Error al generar resumen del recurso.</td>
-             </tr>`;
-           }
-         }
-         recursoNum++;
-         Utilities.sleep(2000);
-       }
-     }
-   }
-
-   try {
-     for (const page of ['search', 'details', 'description']) {
-       var pdf = convertHtmlToPdfViaDoc(pages[page].getDataAsString(), 'sicop_' + page);
-       if (pdf) attachments.push(pdf);
-     }
-   } catch (pdfError) {
-     if (pdfError.message.includes('Service unavailable') || pdfError.message.includes('Service invoked too many times')) {
-       pdfMessage = '<br><br><strong>Nota: Servicio de conversión a PDF no disponible temporalmente. Se adjuntan archivos HTML.</strong>';
-       attachments = htmlAttachments;
-     } else {
-       throw pdfError;
-     }
-   }
-
-   if (!pdfMessage) {
-     attachments = attachments.concat(htmlAttachments);
-   }
-
-   var dateAnalysis = analyzeDates(emailDate, pages.details.getDataAsString());
-   
-   var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
-               '<table style="width:100%; border-collapse: collapse; margin-bottom: 20px;">' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Procedimiento</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + procedimientoNum + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de remisión de correo SICOP</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.emailDate + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de publicación del cartel</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.publicationDate + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Días hábiles</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.workingDays + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Estado</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;"><strong>' + dateAnalysis.status + '</strong></td></tr>' +
-               summariesHtml +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>URLs consultadas</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">1. ' + pages.urls[0] + '<br>2. ' + pages.urls[1] + '<br>3. ' + pages.urls[2] + '</td></tr>' +
-               '</table>' +
-               pdfMessage +
-               '</div>';
-
-   GmailApp.sendEmail(
-     sender,
-     'Resultado SICOP - Procedimiento ' + procedimientoNum,
-     '', 
-     {
-       htmlBody: htmlBody,
-       attachments: attachments,
-       replyTo: originalMessage.getReplyTo() || sender
-     }
-   );
-
-   Logger.log('Correo enviado');
- } catch (e) {
-   logError('EMAIL_SEND_ERROR', e);
-   if (e.message.includes('Service unavailable')) {
-     Utilities.sleep(Math.pow(2, attempt) * 1000);
-     sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate, attempt + 1);
-   }
- }
+// Format and process content
+function processConceptsAndFormat(summary) {
+  let concepts = [];
+  
+  // Extract concepts section
+  const conceptsMatch = summary.match(/CONCEPTOS\s+CLAVES?:([^]*?)$/i);
+  if (!conceptsMatch) return { formattedText: summary.replace(/\*/g, ''), cleanedConcepts: [] };
+  
+  // Get main content without concepts section
+  let mainContent = summary.substring(0, conceptsMatch.index).trim();
+  
+  // Clean and extract concepts
+  concepts = conceptsMatch[1]
+    .split(/[;,.\n*-]/)
+    .map(c => c.trim().replace(/\*/g, ''))
+    .filter(c => c && c.length > 0 && !c.toLowerCase().includes('conceptos'));
+  
+  // Process main content
+  // 1. Format bold text
+  mainContent = mainContent.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  // 2. Remove any remaining asterisks
+  mainContent = mainContent.replace(/\*/g, '');
+  
+  // Split into paragraphs and process each
+  let paragraphs = mainContent.split(/\n+/).filter(p => p.trim());
+  
+  // Format paragraphs with proper spacing
+  let formattedParagraphs = paragraphs.map(p => {
+    if (p.toLowerCase().includes('petitoria:')) {
+      return `<p style="margin: 1.5em 0;"><strong>Petitoria:</strong> ${p.replace(/petitoria:/i, '').trim()}</p>`;
+    } else if (p.includes(':')) {
+      let [title, content] = p.split(':');
+      return `<p style="margin: 1em 0;"><strong>${title}:</strong> ${content.trim()}</p>`;
+    }
+    return `<p style="margin: 1em 0;">${p.trim()}</p>`;
+  });
+  
+  // Combine formatted content
+  let formattedText = formattedParagraphs.join('\n');
+  
+  // Add concepts section
+  if (concepts.length > 0) {
+    formattedText += `\n<p style="margin-top: 1.5em;"><strong>CONCEPTOS CLAVES:</strong> ${concepts.join('; ')}</p>`;
+  }
+  
+  return {
+    formattedText,
+    cleanedConcepts: concepts
+  };
 }
-async function sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate) {
- try {
-   var attachments = [];
-   var htmlAttachments = [
-     {fileName: 'sicop_busqueda.html', content: pages.search.getBytes(), mimeType: 'text/html'},
-     {fileName: 'sicop_detalles.html', content: pages.details.getBytes(), mimeType: 'text/html'},
-     {fileName: 'sicop_descripcion.html', content: pages.description.getBytes(), mimeType: 'text/html'}
-   ];
 
-   const detailsHtml = pages.details.getDataAsString();
-   const objetosMatch = detailsHtml.match(/fn_datailRecurso\('([^']+)',\s*'([^']+)',\s*1\)/);
-   let summariesHtml = '';
-   let pdfMessage = '';
-
-   if(objetosMatch) {
-     const [_, cartelNo, cartelSeq] = objetosMatch;
-     const recursosUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ400.jsp?cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&reqNew=1`;
-     
-     const recursosResponse = await UrlFetchApp.fetch(recursosUrl, {muteHttpExceptions: true});
-     const recursosHtml = recursosResponse.getContentText();
-
-     htmlAttachments.push({
-       fileName: 'listado_recursos.html',
-       content: Utilities.newBlob(recursosHtml).getBytes(),
-       mimeType: 'text/html'
-     });
-
-     const recursosEnProceso = recursosHtml.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)[^>]*>En proceso/g) || [];
-     let recursoNum = 1;
-     
-     for(const row of recursosEnProceso) {
-       const params = row.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)/);
-       if(params) {
-         const [_, recursoSeqno, cartelNo, cartelSeq, cartelCate] = params;
-         
-         const detalleUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ402.jsp?recursoSeqno=${recursoSeqno}&cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&cartelCate=${cartelCate}&reqNew=1`;
-         const detalleResponse = await UrlFetchApp.fetch(detalleUrl, {muteHttpExceptions: true});
-         const detalleHtml = detalleResponse.getContentText();
-
-         htmlAttachments.push({
-           fileName: `recurso_detalle_${recursoNum}.html`,
-           content: Utilities.newBlob(detalleHtml).getBytes(),
-           mimeType: 'text/html'
-         });
-
-         const contenidoMatch = /<textarea[^>]*name\s*=\s*["']recursoCont["'][^>]*>([\s\S]*?)<\/textarea>/i.exec(detalleHtml);
-         
-         if(contenidoMatch && contenidoMatch[1]) {
-           const contenido = contenidoMatch[1].trim();
-           
-           try {
-             const response = await UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + GEMINI_API_KEY, {
-               method: 'POST',
-               contentType: 'application/json',
-               payload: JSON.stringify({
-                 contents: [{
-                   parts: [{
-                     text: `haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula cuatro conceptos claves de máximo tres palabras, separados por punto y coma cada uno de estos conceptos. \n\n${contenido}`
-                   }]
-                 }],
-                 generationConfig: {
-                   temperature: 0.7,
-                   topK: 40,
-                   topP: 0.95,
-                   maxOutputTokens: 1024,
-                 }
-               }),
-               muteHttpExceptions: true
-             });
-             
-             const result = JSON.parse(response.getContentText());
-             let summary = result.candidates[0].content.parts[0].text;
-             
-             let summaryHtml = `
-               <tr>
-                 <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
-                 <td style="padding:8px; border:1px solid #ddd;">${summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</td>
-               </tr>`;
-
-             const conceptsMatch = summary.match(/conceptos\s+claves?:([^]*?)$/i);
-             if (conceptsMatch) {
-               const conceptos = conceptsMatch[1]
-                 .split(/[;,.\n*-]/)
-                 .map(c => c.trim().replace(/\*/g, ''))
-                 .filter(c => c && c.length > 0 && !c.toLowerCase().includes('conceptos'));
-
-               for (const concepto of conceptos) {
-                 Logger.log('Buscando concepto: ' + concepto);
-                 const webResult = await searchCGRFiles(concepto);
-                 const driveResults = await searchDriveFiles(concepto, FOLDER_IDS);
-                 
-                 let resultsHtml = '';
-                 if (webResult) {
-                   resultsHtml += `<strong>Web:</strong><br>
-                     <a href="${webResult.url}" target="_blank">Ver documento</a><br>
-                     <small>${webResult.snippet}</small>`;
-                 }
-                 
-                 if (driveResults?.length > 0) {
-                   if (resultsHtml) resultsHtml += '<br><br>';
-                   resultsHtml += '<strong>Documentos Drive:</strong><br>' + 
-                     driveResults.map(r => 
-                       `<a href="${r.url}" target="_blank">${r.name}</a><br>
-                        <small>${r.snippet}</small>`
-                     ).join('<br><br>');
-                 }
-                 
-                 summaryHtml += `
-                   <tr>
-                     <td style="padding:8px; border:1px solid #ddd;"><strong>Concepto - ${concepto}</strong></td>
-                     <td style="padding:8px; border:1px solid #ddd;">
-                       ${resultsHtml || 'No se encontraron resultados'}
-                     </td>
-                   </tr>`;
-               }
-             }
-
-             summariesHtml += summaryHtml;
-             attachments.push(Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`));
-           } catch (e) {
-             Logger.log('Error: ' + e.toString());
-             summariesHtml += `<tr>
-               <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
-               <td style="padding:8px; border:1px solid #ddd;">Error al generar resumen del recurso.</td>
-             </tr>`;
-           }
-         }
-         recursoNum++;
-         Utilities.sleep(2000);
-       }
-     }
-   }
-
-   try {
-     for (const page of ['search', 'details', 'description']) {
-       var pdf = convertHtmlToPdfViaDoc(pages[page].getDataAsString(), 'sicop_' + page);
-       if (pdf) attachments.push(pdf);
-     }
-   } catch (pdfError) {
-     if (pdfError.message.includes('Service unavailable') || pdfError.message.includes('Service invoked too many times')) {
-       pdfMessage = '<br><br><strong>Nota: Servicio de conversión a PDF no disponible temporalmente. Se adjuntan archivos HTML.</strong>';
-       attachments = htmlAttachments;
-     } else {
-       throw pdfError;
-     }
-   }
-
-   if (!pdfMessage) {
-     attachments = attachments.concat(htmlAttachments);
-   }
-
-   var dateAnalysis = analyzeDates(emailDate, pages.details.getDataAsString());
-   
-   var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
-               '<table style="width:100%; border-collapse: collapse; margin-bottom: 20px;">' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Procedimiento</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + procedimientoNum + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de remisión de correo SICOP</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.emailDate + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de publicación del cartel</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.publicationDate + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Días hábiles</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.workingDays + '</td></tr>' +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Estado</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;"><strong>' + dateAnalysis.status + '</strong></td></tr>' +
-               summariesHtml +
-               '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>URLs consultadas</strong></td>' +
-               '<td style="padding:8px; border:1px solid #ddd;">1. ' + pages.urls[0] + '<br>2. ' + pages.urls[1] + '<br>3. ' + pages.urls[2] + '</td></tr>' +
-               '</table>' +
-               pdfMessage +
-               '</div>';
-
-   GmailApp.sendEmail(
-     sender,
-     'Resultado SICOP - Procedimiento ' + procedimientoNum,
-     '', 
-     {
-       htmlBody: htmlBody,
-       attachments: attachments,
-       replyTo: originalMessage.getReplyTo() || sender
-     }
-   );
-
-   Logger.log('Correo enviado');
- } catch (e) {
-   logError('EMAIL_SEND_ERROR', e);
-   if (e.message.includes('Service unavailable')) {
-     Utilities.sleep(Math.pow(2, attempt) * 1000);
-     sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate, attempt + 1);
-   }
- }
+// Create folder and set permissions for cgr.go.cr domain
+function createProcedureFolder(procedimientoNum) {
+  try {
+    // Create the folder
+    const folder = DriveApp.createFolder(procedimientoNum);
+    
+    // Set sharing to "Anyone with link in domain can view"
+    folder.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.EDIT);
+    
+    return {
+      id: folder.getId(),
+      url: folder.getUrl(),
+      folder: folder
+    };
+  } catch(e) {
+    Logger.log('Error creating folder: ' + e);
+    throw e;
+  }
 }
+
+// Save web result to Drive folder
+function saveWebResultToFolder(webResult, folder) {
+  if (!webResult || !webResult.url) return null;
+  
+  try {
+    // Download the file
+    const response = UrlFetchApp.fetch(webResult.url, {muteHttpExceptions: true});
+    if (response.getResponseCode() !== 200) return null;
+    
+    const blob = response.getBlob();
+    
+    // If it's a PDF, convert to Google Doc
+    if (blob.getContentType() === 'application/pdf') {
+      const tempFile = folder.createFile(blob);
+      const docFile = Drive.Files.copy({
+        title: tempFile.getName().replace('.pdf', ' - Convertido'),
+        mimeType: 'application/vnd.google-apps.document'
+      }, tempFile.getId());
+      
+      // Eliminar archivo temporal después de la conversión
+      tempFile.setTrashed(true);
+      
+      return {
+        name: docFile.title,
+        url: `https://docs.google.com/document/d/${docFile.id}/edit`,
+        type: 'converted'
+      };
+    } else {
+      // Si no es PDF, guardar como está
+      const file = folder.createFile(blob);
+      return {
+        name: file.getName(),
+        url: file.getUrl(),
+        type: 'original'
+      };
+    }
+  } catch(e) {
+    Logger.log('Error saving web result: ' + e);
+    return null;
+  }
+}
+
+function copyDriveFileToFolder(fileId, folder) {
+  try {
+    const originalFile = DriveApp.getFileById(fileId);
+    const fileName = originalFile.getName();
+    Logger.log('Copiando archivo: ' + fileName);
+    
+    if (originalFile.getMimeType() === 'application/pdf') {
+      Logger.log('Archivo es PDF, convirtiendo a Google Doc');
+      // Primero hacemos una copia del PDF en la carpeta destino
+      const tempFile = originalFile.makeCopy(fileName, folder);
+      
+      // Luego convertimos esa copia a Google Doc
+      const resource = {
+        title: fileName.replace('.pdf', ' - Convertido'),
+        mimeType: 'application/vnd.google-apps.document'
+      };
+      
+      // Usamos la API avanzada de Drive para la conversión
+      const docFile = Drive.Files.copy(resource, tempFile.getId());
+      Logger.log('Archivo convertido: ' + docFile.title);
+      
+      // Aseguramos que el nuevo documento esté en la carpeta correcta
+      DriveApp.getFileById(docFile.id).moveTo(folder);
+      
+      // Eliminamos el PDF temporal
+      tempFile.setTrashed(true);
+      
+      return {
+        name: docFile.title,
+        url: `https://docs.google.com/document/d/${docFile.id}/edit`,
+        type: 'converted'
+      };
+    } else if (originalFile.getMimeType() === 'application/vnd.google-apps.document') {
+      // Si ya es un Google Doc, solo hacemos una copia
+      Logger.log('Archivo ya es Google Doc, copiando');
+      const newFile = originalFile.makeCopy(fileName + ' - Copia', folder);
+      return {
+        name: newFile.getName(),
+        url: newFile.getUrl(),
+        type: 'original'
+      };
+    } else {
+      Logger.log('Archivo no es PDF ni Google Doc, copiando original');
+      const newFile = originalFile.makeCopy(fileName, folder);
+      return {
+        name: newFile.getName(),
+        url: newFile.getUrl(),
+        type: 'original'
+      };
+    }
+  } catch(e) {
+    Logger.log('Error copying drive file: ' + e);
+    return null;
+  }
+}
+
+// Guardar el texto del recurso en la carpeta
+function saveRecursoToFolder(contenido, procedimientoNum, recursoNum, folder) {
+  try {
+    // Crear el archivo de texto
+    const fileName = `Recurso ${recursoNum} - ${procedimientoNum}.txt`;
+    const file = folder.createFile(fileName, contenido, MimeType.PLAIN_TEXT);
+    
+    // Convertir a Google Doc
+    const docFile = Drive.Files.copy({
+      title: fileName.replace('.txt', ' - Convertido'),
+      mimeType: 'application/vnd.google-apps.document'
+    }, file.getId());
+    
+    // Eliminar archivo temporal
+    file.setTrashed(true);
+    
+    return {
+      name: docFile.title,
+      url: `https://docs.google.com/document/d/${docFile.id}/edit`,
+      type: 'converted'
+    };
+  } catch(e) {
+    Logger.log('Error saving recurso text: ' + e);
+    return null;
+  }
+}
+
+// Process search results
+function processSearchResults(concepto, procedureFolderId) {
+  try {
+    const folder = DriveApp.getFolderById(procedureFolderId);
+    let results = {
+      web: null,
+      drive: [],
+      folderUrl: folder.getUrl()
+    };
+    
+    // Search Drive
+    Logger.log('Iniciando búsqueda en Drive para: ' + concepto);
+    const driveResults = searchDriveFiles(concepto, FOLDER_IDS);
+    
+    if (driveResults?.length > 0) {
+      Logger.log(`Encontrados ${driveResults.length} resultados en Drive`);
+      
+      for (const result of driveResults) {
+        Logger.log('Procesando resultado: ' + result.url);
+        // Extraer ID del archivo de la URL
+        const fileId = result.url.match(/[-\w]{25,}/);
+        
+        if (fileId) {
+          Logger.log('ID del archivo encontrado: ' + fileId[0]);
+          try {
+            const file = DriveApp.getFileById(fileId[0]);
+            Logger.log('Nombre del archivo original: ' + file.getName());
+            
+            const savedFile = copyDriveFileToFolder(fileId[0], folder);
+            if (savedFile) {
+              Logger.log('Archivo copiado exitosamente: ' + savedFile.name);
+              results.drive.push(savedFile);
+            } else {
+              Logger.log('Error al copiar el archivo');
+            }
+          } catch (fileError) {
+            Logger.log('Error al acceder al archivo: ' + fileError);
+          }
+        }
+      }
+    }
+    
+    // Search web
+    Logger.log('Iniciando búsqueda web para: ' + concepto);
+    const webResult = searchCGRFiles(concepto);
+    if (webResult) {
+      Logger.log('Resultado web encontrado, guardando en carpeta');
+      const savedFile = saveWebResultToFolder(webResult, folder);
+      if (savedFile) {
+        results.web = savedFile;
+        Logger.log('Archivo web guardado: ' + savedFile.name);
+      }
+    }
+    
+    Logger.log('Resultados procesados - Drive: ' + results.drive.length + ', Web: ' + (results.web ? '1' : '0'));
+    return results;
+    
+  } catch(e) {
+    Logger.log('Error en processSearchResults: ' + e);
+    return {
+      web: null,
+      drive: [],
+      folderUrl: folder.getUrl()
+    };
+  }
+}
+
+// Generate HTML for processed results
+function generateProcessedResultsHtml(results) {
+  let resultsHtml = '';
+  
+  if (results.web) {
+    resultsHtml += `<strong>Documento CGR:</strong><br>
+      <a href="${results.web.url}" target="_blank">${results.web.name}</a>
+      ${results.web.type === 'converted' ? ' (Convertido a Google Doc)' : ''}<br>`;
+  }
+  
+  if (results.drive.length > 0) {
+    if (resultsHtml) resultsHtml += '<br><br>';
+    resultsHtml += '<strong>Documentos encontrados:</strong><br>' + 
+      results.drive.map(file => 
+        `<a href="${file.url}" target="_blank">${file.name}</a>
+         ${file.type === 'converted' ? ' (Convertido a Google Doc)' : ''}`
+      ).join('<br>');
+  }
+  
+  if (!resultsHtml) {
+    resultsHtml = 'No se encontraron resultados';
+  }
+  
+  return resultsHtml;
+}
+
+function sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate) {
+  try {
+    var attachments = [];
+    var htmlAttachments = [
+      {fileName: 'sicop_busqueda.html', content: pages.search.getBytes(), mimeType: 'text/html'},
+      {fileName: 'sicop_detalles.html', content: pages.details.getBytes(), mimeType: 'text/html'},
+      {fileName: 'sicop_descripcion.html', content: pages.description.getBytes(), mimeType: 'text/html'}
+    ];
+
+    // Crear carpeta para el procedimiento
+    const procedureFolder = createProcedureFolder(procedimientoNum);
+    let folderInfo = `<tr>
+      <td style="padding:8px; border:1px solid #ddd;"><strong>Carpeta de documentos</strong></td>
+      <td style="padding:8px; border:1px solid #ddd;">
+        <a href="${procedureFolder.url}" target="_blank">Ver documentos del procedimiento</a>
+      </td>
+    </tr>`;
+
+    const detailsHtml = pages.details.getDataAsString();
+    const objetosMatch = detailsHtml.match(/fn_datailRecurso\('([^']+)',\s*'([^']+)',\s*1\)/);
+    let summariesHtml = '';
+    let pdfMessage = '';
+
+    if(objetosMatch) {
+      const [_, cartelNo, cartelSeq] = objetosMatch;
+      const recursosUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ400.jsp?cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&reqNew=1`;
+      
+      const recursosResponse = UrlFetchApp.fetch(recursosUrl, {muteHttpExceptions: true});
+      const recursosHtml = recursosResponse.getContentText();
+
+      htmlAttachments.push({
+        fileName: 'listado_recursos.html',
+        content: Utilities.newBlob(recursosHtml).getBytes(),
+        mimeType: 'text/html'
+      });
+
+      const recursosEnProceso = recursosHtml.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)[^>]*>En proceso/g) || [];
+      let recursoNum = 1;
+      
+      for(const row of recursosEnProceso) {
+        const params = row.match(/js_recursoDetail\('(\d+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']*)'\)/);
+        if(params) {
+          const [_, recursoSeqno, cartelNo, cartelSeq, cartelCate] = params;
+          
+          const detalleUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ402.jsp?recursoSeqno=${recursoSeqno}&cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&cartelCate=${cartelCate}&reqNew=1`;
+          const detalleResponse = UrlFetchApp.fetch(detalleUrl, {muteHttpExceptions: true});
+          const detalleHtml = detalleResponse.getContentText();
+
+          htmlAttachments.push({
+            fileName: `recurso_detalle_${recursoNum}.html`,
+            content: Utilities.newBlob(detalleHtml).getBytes(),
+            mimeType: 'text/html'
+          });
+
+          const contenidoMatch = /<textarea[^>]*name\s*=\s*["']recursoCont["'][^>]*>([\s\S]*?)<\/textarea>/i.exec(detalleHtml);
+          
+          if(contenidoMatch && contenidoMatch[1]) {
+            const contenido = contenidoMatch[1].trim();
+            
+            try {
+              const response = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + GEMINI_API_KEY, {
+                method: 'POST',
+                contentType: 'application/json',
+                payload: JSON.stringify({
+                  contents: [{
+                    parts: [{
+                      text: `haz un resumen de los principales argumentos del recurso de objeción, títula cada argumento con una idea principal y ponle dos punto al final de esa idea.Haz el resument de cada argumento en un sólo párrafo.Siempre debes incluir  la petitoria del recurso al final del resumen con el título Petitoria:. No ennumeres los argumentos ni la Petitoria.Al final del resumen pon en mayúscula cuatro conceptos claves de máximo tres palabras, separados por punto y coma cada uno de estos conceptos. \n\n${contenido}`
+                    }]
+                  }],
+                  generationConfig: {
+                    temperature: 0.7,
+                    topK: 40,
+                    topP: 0.95,
+                    maxOutputTokens: 1024,
+                  }
+                }),
+                muteHttpExceptions: true
+              });
+              
+              const result = JSON.parse(response.getContentText());
+              let summary = result.candidates[0].content.parts[0].text;
+              
+              // Guardar el texto del recurso en la carpeta
+              const recursoFile = saveRecursoToFolder(contenido, procedimientoNum, recursoNum, procedureFolder.folder);
+              
+              // Procesar el resumen y obtener conceptos limpios
+              const { formattedText, cleanedConcepts } = processConceptsAndFormat(summary);
+              
+              let summaryHtml = `
+                <tr>
+                  <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
+                  <td style="padding:8px; border:1px solid #ddd;">${formattedText}</td>
+                </tr>`;
+
+              // Procesar cada concepto limpio
+              for (const concepto of cleanedConcepts) {
+                Logger.log('Procesando concepto: ' + concepto);
+                const searchResults = processSearchResults(concepto, procedureFolder.id);
+                
+                summaryHtml += `
+                  <tr>
+                    <td style="padding:8px; border:1px solid #ddd;"><strong>Concepto - ${concepto}</strong></td>
+                    <td style="padding:8px; border:1px solid #ddd;">${generateProcessedResultsHtml(searchResults)}</td>
+                  </tr>`;
+              }
+
+              summariesHtml += summaryHtml;
+              attachments.push(Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`));
+            } catch (e) {
+              Logger.log('Error: ' + e.toString());
+              summariesHtml += `<tr>
+                <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
+                <td style="padding:8px; border:1px solid #ddd;">Error al generar resumen del recurso.</td>
+              </tr>`;
+            }
+          }
+          recursoNum++;
+          Utilities.sleep(2000);
+        }
+      }
+    }
+
+    try {
+      for (const page of ['search', 'details', 'description']) {
+        var pdf = convertHtmlToPdfViaDoc(pages[page].getDataAsString(), 'sicop_' + page);
+        if (pdf) attachments.push(pdf);
+      }
+    } catch (pdfError) {
+      if (pdfError.message.includes('Service unavailable') || pdfError.message.includes('Service invoked too many times')) {
+        pdfMessage = '<br><br><strong>Nota: Servicio de conversión a PDF no disponible temporalmente. Se adjuntan archivos HTML.</strong>';
+        attachments = htmlAttachments;
+      } else {
+        throw pdfError;
+      }
+    }
+
+    if (!pdfMessage) {
+      attachments = attachments.concat(htmlAttachments);
+    }
+
+    var dateAnalysis = analyzeDates(emailDate, pages.details.getDataAsString());
+    
+    var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
+                '<table style="width:100%; border-collapse: collapse; margin-bottom: 20px;">' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Procedimiento</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + procedimientoNum + '</td></tr>' +
+                folderInfo +  // Agregamos el link a la carpeta
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de remisión de correo SICOP</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.emailDate + '</td></tr>' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de publicación del cartel</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.publicationDate + '</td></tr>' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Días hábiles</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.workingDays + '</td></tr>' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Estado</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;"><strong>' + dateAnalysis.status + '</strong></td></tr>' +
+                summariesHtml +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>URLs consultadas</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">1. ' + pages.urls[0] + '<br>2. ' + pages.urls[1] + '<br>3. ' + pages.urls[2] + '</td></tr>' +
+                '</table>' +
+                pdfMessage +
+                '</div>';
+
+    GmailApp.sendEmail(
+      sender,
+      'Resultado SICOP - Procedimiento ' + procedimientoNum,
+      '', 
+      {
+        htmlBody: htmlBody,
+        attachments: attachments,
+        replyTo: originalMessage.getReplyTo() || sender
+      }
+    );
+
+    Logger.log('Correo enviado');
+  } catch (e) {
+    logError('EMAIL_SEND_ERROR', e);
+    if (e.message.includes('Service unavailable')) {
+      Utilities.sleep(Math.pow(2, attempt) * 1000);
+      sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate, attempt + 1);
+    }
+  }
+}
+
 function sendErrorEmail(sender, procedimientoNum, errorMessage) {
   try {
     var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
