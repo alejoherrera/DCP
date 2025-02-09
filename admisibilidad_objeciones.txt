@@ -273,7 +273,7 @@ function processSummary(text) {
 
 
 
-const FOLDER_IDS = ['1AkBzZ1Mb3RB8Ir']; // Reemplazar con IDs reales
+const FOLDER_IDS = ['1AkBzZ1Mb3RB8IrwjQIdSyg6']; // Reemplazar con IDs reales
 
 
 
@@ -454,74 +454,21 @@ function saveWebResultToFolder(webResult, folder) {
   }
 }
 
-function copyDriveFileToFolder(fileId, folder) {
-  try {
-    const originalFile = DriveApp.getFileById(fileId);
-    const fileName = originalFile.getName();
-    Logger.log('Copiando archivo: ' + fileName);
-    
-    if (originalFile.getMimeType() === 'application/pdf') {
-      Logger.log('Archivo es PDF, convirtiendo a Google Doc');
-      // Primero hacemos una copia del PDF en la carpeta destino
-      const tempFile = originalFile.makeCopy(fileName, folder);
-      
-      // Luego convertimos esa copia a Google Doc
-      const resource = {
-        title: fileName.replace('.pdf', ' - Convertido'),
-        mimeType: 'application/vnd.google-apps.document'
-      };
-      
-      // Usamos la API avanzada de Drive para la conversión
-      const docFile = Drive.Files.copy(resource, tempFile.getId());
-      Logger.log('Archivo convertido: ' + docFile.title);
-      
-      // Aseguramos que el nuevo documento esté en la carpeta correcta
-      DriveApp.getFileById(docFile.id).moveTo(folder);
-      
-      // Eliminamos el PDF temporal
-      tempFile.setTrashed(true);
-      
-      return {
-        name: docFile.title,
-        url: `https://docs.google.com/document/d/${docFile.id}/edit`,
-        type: 'converted'
-      };
-    } else if (originalFile.getMimeType() === 'application/vnd.google-apps.document') {
-      // Si ya es un Google Doc, solo hacemos una copia
-      Logger.log('Archivo ya es Google Doc, copiando');
-      const newFile = originalFile.makeCopy(fileName + ' - Copia', folder);
-      return {
-        name: newFile.getName(),
-        url: newFile.getUrl(),
-        type: 'original'
-      };
-    } else {
-      Logger.log('Archivo no es PDF ni Google Doc, copiando original');
-      const newFile = originalFile.makeCopy(fileName, folder);
-      return {
-        name: newFile.getName(),
-        url: newFile.getUrl(),
-        type: 'original'
-      };
-    }
-  } catch(e) {
-    Logger.log('Error copying drive file: ' + e);
-    return null;
-  }
-}
-
-// Guardar el texto del recurso en la carpeta
 function saveRecursoToFolder(contenido, procedimientoNum, recursoNum, folder) {
   try {
+    Logger.log('Guardando recurso ' + recursoNum + ' del procedimiento ' + procedimientoNum);
+    
     // Crear el archivo de texto
     const fileName = `Recurso ${recursoNum} - ${procedimientoNum}.txt`;
     const file = folder.createFile(fileName, contenido, MimeType.PLAIN_TEXT);
+    Logger.log('Archivo txt creado: ' + fileName);
     
     // Convertir a Google Doc
     const docFile = Drive.Files.copy({
       title: fileName.replace('.txt', ' - Convertido'),
       mimeType: 'application/vnd.google-apps.document'
     }, file.getId());
+    Logger.log('Archivo convertido a Google Doc: ' + docFile.title);
     
     // Eliminar archivo temporal
     file.setTrashed(true);
@@ -536,7 +483,81 @@ function saveRecursoToFolder(contenido, procedimientoNum, recursoNum, folder) {
     return null;
   }
 }
+function copyDriveFileToFolder(fileId, folder) {
+  try {
+    const originalFile = DriveApp.getFileById(fileId);
+    const fileName = originalFile.getName();
+    const originalUrl = originalFile.getUrl(); // Guardamos la URL original
+    
+    if (originalFile.getMimeType() === 'application/pdf') {
+      // Para PDFs, convertir a Google Doc pero mantener link original
+      const tempFile = originalFile.makeCopy(folder);
+      const docFile = Drive.Files.copy({
+        title: fileName.replace('.pdf', ' - Convertido'),
+        mimeType: 'application/vnd.google-apps.document'
+      }, tempFile.getId());
+      
+      tempFile.setTrashed(true);
+      
+      return {
+        name: fileName,
+        url: `https://docs.google.com/document/d/${docFile.id}/edit`,
+        originalUrl: originalUrl,
+        type: 'converted'
+      };
+    } else {
+      const newFile = originalFile.makeCopy(folder);
+      return {
+        name: fileName,
+        url: newFile.getUrl(),
+        originalUrl: originalUrl,
+        type: 'original'
+      };
+    }
+  } catch(e) {
+    Logger.log('Error copying drive file: ' + e);
+    return null;
+  }
+}
 
+function saveWebResultToFolder(webResult, folder) {
+  if (!webResult || !webResult.url) return null;
+  
+  try {
+    const response = UrlFetchApp.fetch(webResult.url, {muteHttpExceptions: true});
+    if (response.getResponseCode() !== 200) return null;
+    
+    const blob = response.getBlob();
+    
+    if (blob.getContentType() === 'application/pdf') {
+      const tempFile = folder.createFile(blob);
+      const docFile = Drive.Files.copy({
+        title: tempFile.getName().replace('.pdf', ' - Convertido'),
+        mimeType: 'application/vnd.google-apps.document'
+      }, tempFile.getId());
+      
+      tempFile.setTrashed(true);
+      
+      return {
+        name: docFile.title,
+        url: `https://docs.google.com/document/d/${docFile.id}/edit`,
+        originalUrl: webResult.url,
+        type: 'converted'
+      };
+    } else {
+      const file = folder.createFile(blob);
+      return {
+        name: file.getName(),
+        url: file.getUrl(),
+        originalUrl: webResult.url,
+        type: 'original'
+      };
+    }
+  } catch(e) {
+    Logger.log('Error saving web result: ' + e);
+    return null;
+  }
+}
 // Process search results
 function processSearchResults(concepto, procedureFolderId) {
   try {
@@ -651,7 +672,6 @@ function sendResultEmail(sender, procedimientoNum, pages, originalMessage, email
     const detailsHtml = pages.details.getDataAsString();
     const objetosMatch = detailsHtml.match(/fn_datailRecurso\('([^']+)',\s*'([^']+)',\s*1\)/);
     let summariesHtml = '';
-    let pdfMessage = '';
 
     if(objetosMatch) {
       const [_, cartelNo, cartelSeq] = objetosMatch;
@@ -715,6 +735,9 @@ function sendResultEmail(sender, procedimientoNum, pages, originalMessage, email
               // Guardar el texto del recurso en la carpeta
               const recursoFile = saveRecursoToFolder(contenido, procedimientoNum, recursoNum, procedureFolder.folder);
               
+              // Agregar el txt como adjunto al correo
+              attachments.push(Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`));
+              
               // Procesar el resumen y obtener conceptos limpios
               const { formattedText, cleanedConcepts } = processConceptsAndFormat(summary);
               
@@ -737,7 +760,6 @@ function sendResultEmail(sender, procedimientoNum, pages, originalMessage, email
               }
 
               summariesHtml += summaryHtml;
-              attachments.push(Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`));
             } catch (e) {
               Logger.log('Error: ' + e.toString());
               summariesHtml += `<tr>
@@ -752,23 +774,8 @@ function sendResultEmail(sender, procedimientoNum, pages, originalMessage, email
       }
     }
 
-    try {
-      for (const page of ['search', 'details', 'description']) {
-        var pdf = convertHtmlToPdfViaDoc(pages[page].getDataAsString(), 'sicop_' + page);
-        if (pdf) attachments.push(pdf);
-      }
-    } catch (pdfError) {
-      if (pdfError.message.includes('Service unavailable') || pdfError.message.includes('Service invoked too many times')) {
-        pdfMessage = '<br><br><strong>Nota: Servicio de conversión a PDF no disponible temporalmente. Se adjuntan archivos HTML.</strong>';
-        attachments = htmlAttachments;
-      } else {
-        throw pdfError;
-      }
-    }
-
-    if (!pdfMessage) {
-      attachments = attachments.concat(htmlAttachments);
-    }
+    // Combinar todos los adjuntos
+    attachments = attachments.concat(htmlAttachments);
 
     var dateAnalysis = analyzeDates(emailDate, pages.details.getDataAsString());
     
@@ -776,7 +783,7 @@ function sendResultEmail(sender, procedimientoNum, pages, originalMessage, email
                 '<table style="width:100%; border-collapse: collapse; margin-bottom: 20px;">' +
                 '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Procedimiento</strong></td>' +
                 '<td style="padding:8px; border:1px solid #ddd;">' + procedimientoNum + '</td></tr>' +
-                folderInfo +  // Agregamos el link a la carpeta
+                folderInfo +  // Link a la carpeta
                 '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de remisión de correo SICOP</strong></td>' +
                 '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.emailDate + '</td></tr>' +
                 '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de publicación del cartel</strong></td>' +
@@ -789,7 +796,6 @@ function sendResultEmail(sender, procedimientoNum, pages, originalMessage, email
                 '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>URLs consultadas</strong></td>' +
                 '<td style="padding:8px; border:1px solid #ddd;">1. ' + pages.urls[0] + '<br>2. ' + pages.urls[1] + '<br>3. ' + pages.urls[2] + '</td></tr>' +
                 '</table>' +
-                pdfMessage +
                 '</div>';
 
     GmailApp.sendEmail(

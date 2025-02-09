@@ -1,0 +1,432 @@
+const GEMINI_API_KEY = "AIzaSyDYEpXc1itRaqlwCCsKETa2nSQKs4Wh_Y0";
+
+function createTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    ScriptApp.deleteTrigger(triggers[i]);
+  }
+  
+  ScriptApp.newTrigger('checkNewEmails')
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+}
+
+function checkNewEmails() {
+  try {
+    var label = GmailApp.getUserLabelByName('Procesado');
+    if (!label) {
+      label = GmailApp.createLabel('Procesado');
+    }
+    
+    var threads = GmailApp.search('from:*@cgr.go.cr -label:Procesado is:unread "SICOP le informa" newer_than:7d');
+    Logger.log('Correos encontrados: ' + threads.length);
+    
+    for (var i = 0; i < threads.length; i++) {
+      try {
+        var thread = threads[i];
+        var messages = thread.getMessages();
+        var lastMessage = messages[messages.length - 1];
+        Logger.log('Procesando mensaje del hilo...');
+        processMessage(lastMessage);
+      } catch (threadError) {
+        logError('THREAD_PROCESSING_ERROR', threadError);
+      }
+    }
+  } catch (e) {
+    logError('EMAIL_SEARCH_ERROR', e);
+  }
+}
+
+function processMessage(message) {
+ try {
+   var body = message.getPlainBody();
+   var sender = message.getFrom().match(/<(.+?)>/)[1] || message.getFrom();
+   var emailDate = new Date(message.getDate());
+   
+   Logger.log('Procesando correo de: ' + sender);
+   Logger.log('Contenido del correo: ' + body.substring(0, 200));
+   
+   // Buscar el número de procedimiento con asteriscos o sin ellos
+   var procedimientoMatch = body.match(/procedimiento número \*?(\d{4}LY-\d{6}-\d{10})\*?/i) || 
+                           body.match(/contra el procedimiento número \*?(\d{4}LY-\d{6}-\d{10})\*?/i) ||
+                           body.match(/procedimiento número \*?(\d{4}LE-\d{6}-\d{10})\*?/i);
+                           
+   if (!procedimientoMatch) {
+     // Si no se encuentra, buscar de forma más genérica
+     procedimientoMatch = body.match(/\*?(\d{4}LY-\d{6}-\d{10})\*?/i) || 
+                         body.match(/\*?(\d{4}LE-\d{6}-\d{10})\*?/i);
+   }
+   
+   if (!procedimientoMatch) {
+     logError('INVALID_FORMAT_ERROR', new Error('Formato de procedimiento no encontrado en el correo'));
+     Logger.log('No se encontró procedimiento en el texto');
+     return;
+   }
+
+   var procedimientoNum = procedimientoMatch[1];
+   Logger.log('Procedimiento encontrado: ' + procedimientoNum);
+   
+   fetchSICOPPage(procedimientoNum, sender, message, emailDate);
+   
+   // Marcar el mensaje y el hilo como leídos
+   message.markRead();
+   message.getThread().markRead();
+   var label = GmailApp.getUserLabelByName('Procesado');
+   label.addToThread(message.getThread());
+   
+ } catch (e) {
+   logError('MESSAGE_PROCESSING_ERROR', e);
+ }
+}
+
+function isWorkingDay(date) {
+  var day = date.getDay();
+  return day !== 0 && day !== 6;
+}
+
+function getWorkingDays(startDate, endDate) {
+  let workingDays = 0;
+  const currentDate = new Date(startDate);
+  
+  while (currentDate <= endDate) {
+    if (isWorkingDay(currentDate)) {
+      workingDays++;
+    }
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  return workingDays;
+}
+
+function extractPublicationDate(html) {
+  const regex = /class="tdc"[^>]*>\s*(\d{2}\/\d{2}\/\d{4})\s*</g;
+  const dates = [];
+  let match;
+  
+  while ((match = regex.exec(html)) !== null) {
+    const [_, dateStr] = match;
+    const [day, month, year] = dateStr.trim().split('/').map(Number);
+    dates.push(new Date(year, month - 1, day));
+  }
+
+  if (dates.length === 0) {
+    throw new Error('No se encontró la fecha de publicación');
+  }
+
+  const latestDate = new Date(Math.max.apply(null, dates));
+  return latestDate;
+}
+
+function analyzeDates(emailDate, detailsHtml) {
+  Logger.log('Contenido HTML para analizar fechas:', detailsHtml.substring(0, 500));
+  const publicationDate = extractPublicationDate(detailsHtml);
+  Logger.log('Fecha de publicación encontrada:', publicationDate);
+  Logger.log('Fecha del correo:', emailDate);
+  
+  const workingDays = getWorkingDays(publicationDate, emailDate);
+  const status = workingDays <= 10 ? 'EN TIEMPO' : 'EXTEMPORÁNEO';
+  
+  const formatDate = (date) => {
+    return date.toLocaleDateString('es-CR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+  };
+
+  return {
+    emailDate: formatDate(emailDate),
+    publicationDate: formatDate(publicationDate),
+    workingDays: workingDays,
+    status: status
+  };
+}
+function convertHtmlToPdfViaDoc(htmlContent, fileName, attempt = 1) {
+ try {
+   if (attempt > 3) {
+     throw new Error('Máximo de intentos alcanzado en conversión PDF');
+   }
+   
+   var doc = DocumentApp.create('temp_' + fileName);
+   var body = doc.getBody();
+   
+   var cleanHtml = htmlContent
+     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+   body.appendParagraph(cleanHtml);
+   doc.saveAndClose();
+   
+   var pdfBlob = doc.getAs('application/pdf');
+   DriveApp.getFileById(doc.getId()).setTrashed(true);
+   
+   return {
+     fileName: fileName + '.pdf',
+     content: pdfBlob.getBytes(),
+     mimeType: 'application/pdf'
+   };
+ } catch (e) {
+   logError('PDF_CONVERSION_ERROR', e);
+   if (e.message.includes('Service unavailable')) {
+     Utilities.sleep(Math.pow(2, attempt) * 1000); // Espera exponencial
+     return convertHtmlToPdfViaDoc(htmlContent, fileName, attempt + 1);
+   }
+   return null;
+ }
+}
+function fetchSICOPPage(procedimientoNum, sender, originalMessage, emailDate) {
+  const searchUrl = 'https://www.sicop.go.cr/moduloPcont/pcont/ctract/es/CE_CEJ_ESQ001.jsp';
+  const resultsUrl = 'https://www.sicop.go.cr/moduloPcont/pcont/ctract/es/CE_CEJ_ESQ002.jsp';
+  const detailUrl = 'https://www.sicop.go.cr/moduloPcont/pcont/ctract/es/CE_CEJ_ESQ003.jsp';
+  
+  try {
+    var searchOptions = {
+      'method': 'post',
+      'payload': {
+        'sch_instNo': procedimientoNum,
+        'reqNo': '',
+        'cartelNo': '',
+        'sch_reqNo': '',
+        'sch_reqIdoNo': ''
+      },
+      'followRedirects': true,
+      'muteHttpExceptions': true
+    };
+
+    Logger.log('Enviando solicitud inicial a SICOP...');
+    var response1 = UrlFetchApp.fetch(searchUrl, searchOptions);
+    Utilities.sleep(2000);
+    
+    var html = response1.getContentText();
+    var reqNoMatch = html.match(/fn_detail\('([^']+)','([^']+)'\)/);
+    if (!reqNoMatch) {
+      throw new Error('No se encontraron los parámetros necesarios');
+    }
+    
+    var reqNo = reqNoMatch[1];
+    var cartelNo = reqNoMatch[2];
+    
+    var detailOptions = {
+      'method': 'post',
+      'payload': {
+        'reqNo': reqNo,
+        'cartelNo': cartelNo
+      },
+      'followRedirects': true,
+      'muteHttpExceptions': true
+    };
+    
+    Logger.log('Obteniendo detalles del procedimiento...');
+    var response2 = UrlFetchApp.fetch(resultsUrl, detailOptions);
+    Utilities.sleep(2000);
+    
+    var descriptionOptions = {
+      'method': 'post',
+      'payload': {
+        'reqNo': reqNo,
+        'cartelNo': cartelNo,
+        'accion': 'consultar_descripcion'
+      },
+      'muteHttpExceptions': true
+    };
+    
+    Logger.log('Obteniendo descripción...');
+    var response3 = UrlFetchApp.fetch(detailUrl, descriptionOptions);
+    
+    var pages = {
+      search: response1.getBlob(),
+      details: response2.getBlob(),
+      description: response3.getBlob(),
+      urls: [searchUrl, resultsUrl, detailUrl]
+    };
+    
+    sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate);
+  } catch (e) {
+    logError('SICOP_REQUEST_ERROR', e);
+    sendErrorEmail(sender, procedimientoNum, e.toString());
+  }
+}
+
+async function sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate) {
+  try {
+    var attachments = [];
+    var htmlAttachments = [
+      {fileName: 'sicop_busqueda.html', content: pages.search.getBytes(), mimeType: 'text/html'},
+      {fileName: 'sicop_detalles.html', content: pages.details.getBytes(), mimeType: 'text/html'},
+      {fileName: 'sicop_descripcion.html', content: pages.description.getBytes(), mimeType: 'text/html'}
+    ];
+
+    const detailsHtml = pages.details.getDataAsString();
+    const objetosMatch = detailsHtml.match(/fn_datailRecurso\('([^']+)',\s*'([^']+)',\s*1\)/);
+    let summariesHtml = '';
+    let pdfMessage = '';
+
+    if(objetosMatch) {
+      const [_, cartelNo, cartelSeq] = objetosMatch;
+      const recursosUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ400.jsp?cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&reqNew=1`;
+      
+      const recursosResponse = UrlFetchApp.fetch(recursosUrl, {muteHttpExceptions: true});
+      const recursosHtml = recursosResponse.getContentText();
+
+      htmlAttachments.push({
+        fileName: 'listado_recursos.html',
+        content: Utilities.newBlob(recursosHtml).getBytes(),
+        mimeType: 'text/html'
+      });
+
+      Utilities.sleep(2000);
+
+      const recursosEnProceso = recursosHtml.match(/js_recursoDetail\('([^']+)',\s*'[^']+',\s*'[^']+',\s*'[^']+'\)[^>]*>En proceso/g) || [];
+      let recursoNum = 1;
+      
+      for(const row of recursosEnProceso) {
+        const params = row.match(/js_recursoDetail\('([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)'\)/);
+        if(params) {
+          const [_, recursoSeqno, cartelNo, cartelSeq, cartelCate] = params;
+          const detalleUrl = `https://www.sicop.go.cr/moduloOferta/search/EP_SEJ_POQ402.jsp?recursoSeqno=${recursoSeqno}&cartelNo=${cartelNo}&cartelSeq=${cartelSeq}&cartelCate=${cartelCate}&reqNew=1`;
+          
+          const detalleResponse = UrlFetchApp.fetch(detalleUrl, {muteHttpExceptions: true});
+          const detalleHtml = detalleResponse.getContentText();
+
+          htmlAttachments.push({
+            fileName: `recurso_detalle_${recursoNum}.html`,
+            content: Utilities.newBlob(detalleHtml).getBytes(),
+            mimeType: 'text/html'
+          });
+
+          const contenidoMatch = /<textarea[^>]*name\s*=\s*["']recursoCont["'][^>]*>([\s\S]*?)<\/textarea>/i.exec(detalleHtml);
+          
+          if(contenidoMatch && contenidoMatch[1]) {
+            const contenido = contenidoMatch[1].trim();
+            
+            // Using Gemini free tier
+            const response = await UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + GEMINI_API_KEY, {
+              method: 'POST',
+              contentType: 'application/json',
+              payload: JSON.stringify({
+                contents: [{
+                  parts: [{
+                    text: `haz un resumen de los principales argumentos del recurso de objeción:\n\n${contenido}`
+                  }]
+                }],
+                generationConfig: {
+                  temperature: 0.7,
+                  topK: 40,
+                  topP: 0.95,
+                  maxOutputTokens: 1024,
+                }
+              })
+            });
+            
+            const result = JSON.parse(response.getContentText());
+            let summary = result.candidates[0].content.parts[0].text;
+
+            // Improve formatting
+            summary = summary
+              .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Convert **text** to <strong>text</strong>
+              .replace(/\*\*\*\*\*/g, '<br>•') // Convert ***** to bullet points
+              .replace(/\*\*\*\*/g, '') // Remove remaining asterisks
+              .replace(/\*/g, '') // Remove single asterisks;
+            
+            summariesHtml += `<tr>
+              <td style="padding:8px; border:1px solid #ddd;"><strong>Resumen recurso ${recursoNum}</strong></td>
+              <td style="padding:8px; border:1px solid #ddd;">${summary}</td>
+            </tr>`;
+            
+            const recursoBlob = Utilities.newBlob(contenido, 'text/plain', `recurso_${recursoNum}.txt`);
+            attachments.push(recursoBlob);
+          }
+
+          recursoNum++;
+          Utilities.sleep(2000);
+        }
+      }
+    }
+
+    try {
+      for (const page of ['search', 'details', 'description']) {
+        var pdf = convertHtmlToPdfViaDoc(pages[page].getDataAsString(), 'sicop_' + page);
+        if (pdf) attachments.push(pdf);
+      }
+    } catch (pdfError) {
+      if (pdfError.message.includes('Service unavailable') || pdfError.message.includes('Service invoked too many times')) {
+        pdfMessage = '<br><br><strong>Nota: Servicio de conversión a PDF no disponible temporalmente. Se adjuntan archivos HTML.</strong>';
+        attachments = htmlAttachments;
+      } else {
+        throw pdfError;
+      }
+    }
+
+    if (!pdfMessage) {
+      attachments = attachments.concat(htmlAttachments);
+    }
+
+    var dateAnalysis = analyzeDates(emailDate, pages.details.getDataAsString());
+    
+    var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
+                '<table style="width:100%; border-collapse: collapse; margin-bottom: 20px;">' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Procedimiento</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + procedimientoNum + '</td></tr>' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de remisión de correo SICOP</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.emailDate + '</td></tr>' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Fecha de publicación del cartel</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.publicationDate + '</td></tr>' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Días hábiles</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">' + dateAnalysis.workingDays + '</td></tr>' +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>Estado</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;"><strong>' + dateAnalysis.status + '</strong></td></tr>' +
+                summariesHtml +
+                '<tr><td style="padding:8px; border:1px solid #ddd;"><strong>URLs consultadas</strong></td>' +
+                '<td style="padding:8px; border:1px solid #ddd;">1. ' + pages.urls[0] + '<br>2. ' + pages.urls[1] + '<br>3. ' + pages.urls[2] + '</td></tr>' +
+                '</table>' +
+                pdfMessage +
+                '</div>';
+
+    GmailApp.sendEmail(
+      sender,
+      'Resultado SICOP - Procedimiento ' + procedimientoNum,
+      '', 
+      {
+        htmlBody: htmlBody,
+        attachments: attachments,
+        replyTo: originalMessage.getReplyTo() || sender
+      }
+    );
+
+    Logger.log('Correo enviado a: ' + sender);
+  } catch (e) {
+    logError('EMAIL_SEND_ERROR', e);
+    if (e.message.includes('Service unavailable')) {
+      Utilities.sleep(Math.pow(2, attempt) * 1000);
+      sendResultEmail(sender, procedimientoNum, pages, originalMessage, emailDate, attempt + 1);
+    }
+  }
+}
+function sendErrorEmail(sender, procedimientoNum, errorMessage) {
+  try {
+    var htmlBody = '<div style="font-family: Arial, sans-serif; font-size: 12pt; font-weight: bold;">' +
+                  'Ocurrió un error al procesar la consulta:<br><br>' + 
+                  errorMessage +
+                  '</div>';
+                  
+    GmailApp.sendEmail(
+      sender,
+      'Error SICOP - Procedimiento ' + procedimientoNum,
+      '',
+      {
+        htmlBody: htmlBody
+      }
+    );
+  } catch (e) {
+    logError('ERROR_EMAIL_SEND_ERROR', e);
+  }
+}
+
+function logError(errorType, error) {
+  const errorLog = {
+    timestamp: new Date().toISOString(),
+    type: errorType,
+    message: error.message,
+    stack: error.stack
+  };
+  Logger.log('ERROR - ' + JSON.stringify(errorLog));
+}
