@@ -1,4 +1,4 @@
-const GEMINI_API_KEY = "AIzaSyDYEpXc1itRaqlwCCsKETa2nSQKs4Wh_Y0";
+const GEMINI_API_KEY = "AIzaSyDYa2nSQKs4Wh_Y0";
 
 function createTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
